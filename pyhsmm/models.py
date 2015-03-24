@@ -239,6 +239,25 @@ class _HMMBase(Model):
 
         return fig
 
+    def plot_multi(self,stateidx=0,fig=None,plot_slice=slice(None),update=False,draw=True,same_yaxis=False):
+        update = update and (fig is not None)
+        
+        curr_state = self.states_list[stateidx]
+        ndim = curr_state.data.shape[1]
+        
+        sz = self._fig_sz
+        fig = plt.figure(figsize=(sz*2,1.5*ndim))
+        
+        stateseq_axs = self._get_axes_multi(fig, ndim)
+        sp2_artists = self.plot_stateseq_single(curr_state,
+                                                stateseq_axs,
+                                                plot_slice,
+                                                update=update,
+                                                draw=False,
+                                                same_yaxis=same_yaxis)
+        if draw: plt.draw()
+        return sp2_artists
+
     def plot(self,fig=None,plot_slice=slice(None),update=False,draw=True):
         update = update and (fig is not None)
         fig = fig if fig else self.make_figure()
@@ -254,6 +273,23 @@ class _HMMBase(Model):
         if draw: plt.draw()
 
         return sp1_artists + sp2_artists
+
+    def _get_axes_multi(self,fig,ndim):
+        # TODO is attaching these to the figure a good idea? why not save them
+        # here and reuse them if we recognize the figure being passed in
+        sz = self._fig_sz
+
+        if hasattr(fig,'stateseq_ax'):
+            return fig.stateseq_axs
+        else:
+            gs = GridSpec(ndim, 1)
+            
+            stateseq_axs = [plt.subplot(gs[idx]) for idx in xrange(ndim)]
+            for ax in stateseq_axs:
+                ax.grid('off')
+            
+            fig._stateseq_axs = stateseq_axs
+            return stateseq_axs
 
     def _get_axes(self,fig):
         # TODO is attaching these to the figure a good idea? why not save them
@@ -359,6 +395,26 @@ class _HMMBase(Model):
         else:
             return dict((idx,color) for idx in range(self.num_states))
 
+    def plot_stateseq_single(self,s,axs=None,plot_slice=slice(None),update=False,draw=True,same_yaxis=False):
+        """
+        @params:
+        s - current data item
+        ax - current axis
+        """
+        state_colors = self._get_colors(scalars=True)
+        
+        data_multi = s.data[plot_slice].T
+        for (data_single, ax) in zip(data_multi, axs):
+            data = np.array([[obs] for obs in data_single])
+            ax.plot(data_single)
+            data_values_artist = self._plot_stateseq_pcolor_multi(s,data,ax,state_colors,plot_slice,update,same_yaxis=same_yaxis)
+        
+        for ax in axs[:-1]:
+            ax.set_xticklabels([])
+        
+        if draw: plt.draw()
+        return [data_values_artist]
+
     def plot_stateseq(self,s,ax=None,plot_slice=slice(None),update=False,draw=True):
         s = self.states_list[s] if isinstance(s,int) else s
         ax = ax if ax else plt.gca()
@@ -370,6 +426,34 @@ class _HMMBase(Model):
         if draw: plt.draw()
 
         return [data_values_artist]
+
+    def _plot_stateseq_pcolor_multi(self,s,data,ax=None,state_colors=None,
+            plot_slice=slice(None),update=False,color_method=None,same_yaxis=False):
+        # TODO pcolormesh instead of pcolorfast?
+        from pyhsmm.util.general import rle
+        
+        s = self.states_list[s] if isinstance(s,int) else s
+        ax = ax if ax else plt.gca()
+        state_colors = state_colors if state_colors \
+                else self._get_colors(scalars=True,color_method=color_method)
+
+        if update and hasattr(s,'_pcolor_im') and s._pcolor_im in ax.images:
+            s._pcolor_im.remove()
+
+        if same_yaxis:
+            data = s.data[plot_slice]
+        stateseq = s.stateseq[plot_slice]
+
+        stateseq_norep, durations = rle(stateseq)
+        datamin, datamax = data.min(), data.max()
+
+        x, y = np.hstack((0,durations.cumsum())), np.array([datamin,datamax])
+        C = np.atleast_2d([state_colors[state] for state in stateseq_norep])
+
+        s._pcolor_im = ax.pcolorfast(x,y,C,vmin=0,vmax=1,alpha=0.3)
+        if same_yaxis:
+            ax.set_ylim((datamin,datamax))
+        ax.set_xlim((0,len(stateseq)))
 
     def _plot_stateseq_pcolor(self,s,ax=None,state_colors=None,
             plot_slice=slice(None),update=False,color_method=None):
@@ -414,6 +498,7 @@ class _HMMBase(Model):
             segments = np.vstack(
                 [AR_striding(np.hstack((ts[:,None], scalarseq[:,None])),1).reshape(-1,2,2)
                     for scalarseq in data.T])
+            
             lc = s._data_lc = LineCollection(segments)
             lc.set_array(colorseq)
             lc.set_linewidth(0.5)
